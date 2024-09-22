@@ -8,6 +8,7 @@ import java.sql.Connection;
 import javax.sql.DataSource;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.LocalDate;
 
 @Service
@@ -15,11 +16,13 @@ public class JdbcPartitionCleanerService {
 
     private static final Logger logger = LoggerFactory.getLogger(JdbcPartitionCleanerService.class);
 
+    @Value("${outbox.cleaner.retention-period-in-months}")
+    private int retentionPeriodInMonths;
+
     @Value("${outbox.cleaner.batch-size}")
     private int batchSize;
-    private final DataSource dataSource;
 
-    private final String QUERY = "DELETE FROM %s WHERE created_at < NOW() LIMIT ?";
+    private final DataSource dataSource;
 
     public JdbcPartitionCleanerService(DataSource dataSource) {
         this.dataSource = dataSource;
@@ -27,42 +30,28 @@ public class JdbcPartitionCleanerService {
 
     public void cleanPartitions() {
         try (Connection connection = dataSource.getConnection()) {
-            LocalDate currentDate = LocalDate.now();
-            int currentYear = currentDate.getYear();
-            int currentQuarter = (currentDate.getMonthValue() - 1) / 3 + 1;
+            LocalDate cutoffDate = LocalDate.now().minusMonths(retentionPeriodInMonths);
 
-            for (int year = currentYear - 1; year <= currentYear; year++) {
-                for (int quarter = 1; quarter <= 4; quarter++) {
-                    if (year == currentYear && quarter >= currentQuarter) {
-                        break;
-                    }
-
-                    String partitionName = String.format("outbox_%d_q%d", year, quarter);
-                    int deletedRows = deleteRecords(connection, partitionName);
-                    if (deletedRows < batchSize) {
-                        return;
-                    }
-                }
+            // Удаляем устаревшие записи из каждой партиции
+            for (int month = 1; month <= 12; month++) {
+                deleteRecords(connection, month, cutoffDate);
             }
-
         } catch (SQLException e) {
             logger.error("Error cleaning partitions", e);
         }
-
     }
 
-    private int deleteRecords(Connection connection, String partitionName) {
-        String deleteQuery = String.format(QUERY, partitionName);
+    private void deleteRecords(Connection connection, int month, LocalDate cutoffDate) {
+        String partitionName = String.format("outbox_m%d", month);
+        String deleteQuery = String.format("DELETE FROM %s WHERE created_at < ? LIMIT ?", partitionName);
 
         try (PreparedStatement stmt = connection.prepareStatement(deleteQuery)) {
-            stmt.setInt(1, batchSize);
+            stmt.setTimestamp(1, Timestamp.valueOf(cutoffDate.atStartOfDay()));
+            stmt.setInt(2, batchSize);
             int deletedRows = stmt.executeUpdate();
-
             logger.info("Deleted {} records from partition {}", deletedRows, partitionName);
-            return deletedRows;
         } catch (SQLException e) {
             logger.error("Error deleting records from partition {}", partitionName, e);
-            return 0;
         }
     }
 }
