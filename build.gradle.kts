@@ -1,6 +1,6 @@
 plugins {
     java
-    id("maven-publish")
+    `maven-publish`
 
     id("org.springframework.boot") version "3.3.4" apply  false
     id("io.spring.dependency-management") version "1.1.6"
@@ -35,6 +35,10 @@ publishing {
     publications {
         create<MavenPublication>("mavenJava") {
             from(components["java"])
+
+            groupId = group.toString()
+            artifactId = rootProject.name
+            version = project.version.toString()
         }
     }
 }
